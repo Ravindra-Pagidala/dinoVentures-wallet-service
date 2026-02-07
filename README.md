@@ -115,4 +115,3 @@ We chose the simplest, fastest, and most reliable pattern possible while still d
 Ready for production traffic.
 
 — Built with care for real gaming economies.
-```
