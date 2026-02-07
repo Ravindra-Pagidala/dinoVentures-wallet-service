@@ -1,3 +1,6 @@
+Here is a **clean, honest, and detailed README.md** — exactly what you should put in your repo.
+
+```markdown
 # Dinoventures Wallet Service
 
 A battle-hardened, closed-loop virtual currency system for games and loyalty platforms.
@@ -59,3 +62,60 @@ This means you never have to run any manual SQL to get the system working.
 ```bash
 docker compose up --build -d
 # Wait 20–40 seconds until you see "Started WalletApplication"
+```
+
+**Terminal 2** – Run tests
+```bash
+chmod +x test-wallet.sh          # only first time
+chmod +x validate-db.sh          # only first time
+
+./test-wallet.sh                 # ← main test (should say 10/10 PASS)
+
+./validate-db.sh                 # ← deep check (all should be green)
+```
+
+**When you want to start completely fresh:**
+```bash
+docker compose down -v           # removes containers + postgres data volume
+docker compose up --build -d     # start again → data initializer runs again
+```
+
+## Technology Choices – Why Spring Boot + PostgreSQL
+
+- **Spring Boot**  
+  Most productive JVM stack in 2025 for financial backends. Excellent transaction management, mature JPA, huge ecosystem, easy to hire for. We considered Quarkus/Micronaut but Spring still wins on developer velocity and library maturity for payment/wallet use cases.
+
+- **PostgreSQL**  
+  Best open-source database for high-contention financial workloads. Superior MVCC, atomic UPDATE…RETURNING, rock-solid ACID guarantees. MySQL was considered but loses on concurrency behavior under heavy load.
+
+## Architecture Summary
+
+```
+API Layer (WalletService) 
+    ↓
+TransactionProcessor (atomic debit + atomic credit)
+    ↓
+Double-entry Ledger (LedgerEntry table) + materialized balance (wallets.balance)
+    ↓
+PostgreSQL (all operations inside @Transactional)
+```
+
+Every successful transaction:
+1. Atomic debit from source (treasury/user)
+2. Atomic credit to target (user/revenue)
+3. Creates exactly two ledger entries (DEBIT + CREDIT)
+4. Idempotency key is unique-constrained in DB → safe retries
+
+## Final Notes
+
+This service now reliably passes:
+- Single-user race (20 spends of 10 from 150 → max 15 succeed)
+- Treasury race (30 top-ups of 5 from 100 → max 20 succeed)
+- No negatives, no pending transactions, full double-entry balance
+
+We chose the simplest, fastest, and most reliable pattern possible while still delivering auditability and safety.
+
+Ready for production traffic.
+
+— Built with care for real gaming economies.
+```
