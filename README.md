@@ -1,8 +1,3 @@
-Here is a **cleaner, more colorful, visually structured, and slightly rephrased README.md** version that feels more engaging while still being professional and precise.
-
-It satisfies **all core requirements** from the document you pasted — without mentioning brownie points explicitly (as requested).
-
-```markdown
 # Dinoventures Wallet Service  
 **Closed-loop virtual currency engine for games & loyalty platforms**
 
