@@ -74,7 +74,7 @@ This pattern is battle-tested in gaming wallets and fintech ledgers.
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/Ravindra-Pagidala/wallet-service.git
+git clone https://github.com/Ravindra-Pagidala/dinoVentures-wallet-service.git
 
 cd wallet-service
 ```
