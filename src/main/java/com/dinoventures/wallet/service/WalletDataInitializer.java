@@ -31,9 +31,8 @@ public class WalletDataInitializer {
         // 1. Assets (safe)
         createAssetIfMissing("GOLD", "Gold Coins");
         createAssetIfMissing("DIAMONDS", "Diamonds");
-        createAssetIfMissing("BONUS_POINTS", "Bonus Points");
 
-        // 2. Users (FIXED: Let Hibernate auto-generate IDs)
+        // 2. Users
         createUserIfMissing("Test User 1");
         createUserIfMissing("Test User 2");
         createUserIfMissing("Test User 3");
@@ -41,7 +40,6 @@ public class WalletDataInitializer {
         // 3. System Wallets
         createSystemWallets("GOLD");
         createSystemWallets("DIAMONDS");
-        createSystemWallets("BONUS_POINTS");
 
         log.info(" Data initialization complete!");
     }
