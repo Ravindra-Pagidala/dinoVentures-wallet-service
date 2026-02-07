@@ -12,6 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -28,6 +29,7 @@ public class WalletService {
     private final WalletRepository walletRepository;
     private final WalletTransactionRepository walletTransactionRepository;
     private final TransactionProcessor transactionProcessor;
+    private final EntityManager entityManager;  // 🔧 ADD THIS
 
     @Transactional
     public TopUpResponse topUp(TopUpRequest request) {
@@ -48,7 +50,11 @@ public class WalletService {
                 "TOP_UP", treasuryWallet, userWallet, request.amount(),
                 request.idempotencyKey(), user, asset, now);
 
+        //  refresh from database to get updated balance
+        entityManager.refresh(userWallet);
+
         log.info("Top-up success | tx={} user={} balance={}", tx.getId(), user.getId(), userWallet.getBalance());
+
         return mapToTopUpResponse(tx, userWallet);
     }
 
@@ -72,7 +78,11 @@ public class WalletService {
                 "BONUS", bonusWallet, userWallet, request.amount(),
                 request.idempotencyKey(), user, asset, now);
 
+        //  refresh from database to get updated balance
+        entityManager.refresh(userWallet);
+
         log.info("Bonus success | tx={} user={} balance={}", tx.getId(), user.getId(), userWallet.getBalance());
+
         return mapToBonusResponse(tx, userWallet);
     }
 
@@ -96,7 +106,11 @@ public class WalletService {
                 "SPEND", userWallet, revenueWallet, request.amount(),
                 request.idempotencyKey(), user, asset, now);
 
+        // refresh from database to get updated balance
+        entityManager.refresh(userWallet);
+
         log.info("Spend success | tx={} user={} balance={}", tx.getId(), user.getId(), userWallet.getBalance());
+
         return mapToSpendResponse(tx, userWallet);
     }
 

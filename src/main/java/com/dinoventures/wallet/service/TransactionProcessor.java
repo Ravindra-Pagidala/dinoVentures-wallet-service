@@ -13,8 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.util.*;
-import java.util.stream.Collectors;
+import java.util.UUID;
 
 @Slf4j
 @Component
@@ -28,72 +27,91 @@ public class TransactionProcessor {
     @Transactional
     public WalletTransaction processTransfer(
             String transactionType,
-            Wallet fromWallet,      // DEBIT wallet  
-            Wallet toWallet,        // CREDIT wallet
+            Wallet fromWallet,
+            Wallet toWallet,
             BigDecimal amount,
             String idempotencyKey,
             User user,
             AssetType assetType,
             LocalDateTime now) {
 
-        log.debug("Processing transfer | type={} | from={} | to={} | amount={} | key={}",
-                transactionType, fromWallet.getId(), toWallet.getId(), amount, idempotencyKey);
+        log.debug("Processing transfer | type={} | from={} | to={} | amount={}",
+                transactionType, fromWallet.getId(), toWallet.getId(), amount);
 
-        // 1. Lock wallets (deadlock safe)
-        Wallet[] lockedWallets = lockWalletsInOrder(fromWallet, toWallet);
-        Wallet lockedFrom = lockedWallets[0];
-        Wallet lockedTo = lockedWallets[1];
+        // 🔒 CRITICAL FIX: Atomic debit with database-level validation
+        // This single UPDATE statement prevents ALL race conditions
+        int debitResult = walletRepository.atomicDebit(fromWallet.getId(), amount);
 
-        // 2. Validate balance if needed
-        validateBalanceForTransactionType(transactionType, lockedFrom, amount, user, assetType, idempotencyKey, now);
+        if (debitResult == 0) {
+            // Balance check failed at database level - reload to get actual balance
+            Wallet reloadedWallet = walletRepository.findById(fromWallet.getId())
+                    .orElseThrow(() -> new ConflictException("Wallet disappeared: " + fromWallet.getId()));
 
-        // 3. Create and process transaction
-        WalletTransaction tx = createPendingTransaction(transactionType, user, assetType, amount, idempotencyKey, now);
-        createDoubleEntryLedger(tx, lockedFrom, lockedTo, amount, now);
-        updateBalancesAndFinalize(tx, lockedFrom, lockedTo, amount, now);
+            BigDecimal currentBalance = NullSafeUtils.safeGetBigDecimal(reloadedWallet.getBalance());
+            String reason = getFailureReason(transactionType);
 
-        log.debug("Transfer completed | tx={} | fromBalance={} | toBalance={}",
-                tx.getId(), lockedFrom.getBalance(), lockedTo.getBalance());
+            logFailedTransaction(transactionType, user, assetType, amount, reason, idempotencyKey);
+
+            throw new ConflictException(reason + ": " + currentBalance);
+        }
+
+        // 🔒 Lock target wallet and credit atomically
+        int creditResult = walletRepository.atomicCredit(toWallet.getId(), amount);
+
+        if (creditResult == 0) {
+            // Rollback the debit (very rare case - target wallet disappeared)
+            walletRepository.atomicCredit(fromWallet.getId(), amount);
+            throw new ConflictException("Target wallet disappeared: " + toWallet.getId());
+        }
+
+        // Reload both wallets to get updated balances
+        Wallet updatedFrom = walletRepository.findById(fromWallet.getId())
+                .orElseThrow(() -> new ConflictException("Source wallet reload failed"));
+        Wallet updatedTo = walletRepository.findById(toWallet.getId())
+                .orElseThrow(() -> new ConflictException("Target wallet reload failed"));
+
+        // Create transaction record
+        WalletTransaction tx = createSuccessTransaction(transactionType, user, assetType, amount, idempotencyKey, now);
+
+        // Create double-entry ledger
+        createDoubleEntryLedger(tx, updatedFrom, updatedTo, amount, now);
+
+        log.debug("Transfer completed | tx={} | from_balance={} | to_balance={}",
+                tx.getId(), updatedFrom.getBalance(), updatedTo.getBalance());
 
         return tx;
     }
 
-    // === EXTRACTED METHODS ===
-
-    private Wallet[] lockWalletsInOrder(Wallet fromWallet, Wallet toWallet) {
-        List<UUID> walletIds = Arrays.asList(fromWallet.getId(), toWallet.getId());
-        walletIds.sort(Comparator.comparing(UUID::toString));
-
-        Map<UUID, Wallet> lockedWallets = walletIds.stream()
-                .map(id -> walletRepository.findByIdForUpdate(id)
-                        .orElseThrow(() -> new ConflictException("Wallet disappeared: " + id)))
-                .collect(Collectors.toMap(Wallet::getId, w -> w));
-
-        return new Wallet[]{
-                lockedWallets.get(fromWallet.getId()),
-                lockedWallets.get(toWallet.getId())
+    private String getFailureReason(String transactionType) {
+        return switch(transactionType.toUpperCase()) {
+            case "SPEND" -> "INSUFFICIENT_FUNDS";
+            case "TOP_UP" -> "TREASURY_INSUFFICIENT";
+            case "BONUS" -> "BONUS_POOL_EXHAUSTED";
+            default -> "INSUFFICIENT_BALANCE";
         };
     }
 
-    private void validateBalanceForTransactionType(String transactionType, Wallet fromWallet,
-                                                   BigDecimal amount, User user, AssetType assetType,
-                                                   String idempotencyKey, LocalDateTime now) {
-        if (!"SPEND".equalsIgnoreCase(transactionType)) {
-            return; // No balance check for top-up/bonus
-        }
-
-        BigDecimal balance = NullSafeUtils.safeGetBigDecimal(fromWallet.getBalance());
-        if (balance.compareTo(amount) < 0) {
-            log.warn("Insufficient balance | wallet={} | balance={} | required={}",
-                    fromWallet.getId(), balance, amount);
-
-            createFailedTransaction("SPEND", user, assetType, amount,
-                    "INSUFFICIENT_FUNDS", idempotencyKey, now);
-            throw new ConflictException("Insufficient balance: " + balance);
+    private void logFailedTransaction(String type, User user, AssetType asset, BigDecimal amount,
+                                      String reason, String idempotencyKey) {
+        try {
+            WalletTransaction failedTx = WalletTransaction.builder()
+                    .transactionType(type)
+                    .user(user)
+                    .assetType(asset)
+                    .amount(amount)
+                    .status("FAILED")
+                    .failureReason(reason)
+                    .idempotencyKey(idempotencyKey)
+                    .createdAt(NullSafeUtils.safeNow())
+                    .updatedAt(NullSafeUtils.safeNow())
+                    .build();
+            walletTransactionRepository.save(failedTx);
+        } catch (Exception e) {
+            log.error("Failed to log failed transaction: {}", e.getMessage());
         }
     }
 
-    private WalletTransaction createPendingTransaction(String transactionType, User user,
+    private WalletTransaction createSuccessTransaction(String transactionType, User user,
                                                        AssetType assetType, BigDecimal amount,
                                                        String idempotencyKey, LocalDateTime now) {
         WalletTransaction tx = WalletTransaction.builder()
@@ -101,12 +119,11 @@ public class TransactionProcessor {
                 .user(user)
                 .assetType(assetType)
                 .amount(amount)
-                .status("PENDING")
+                .status("SUCCESS")
                 .idempotencyKey(idempotencyKey)
                 .createdAt(now)
                 .updatedAt(now)
                 .build();
-
         return walletTransactionRepository.save(tx);
     }
 
@@ -114,45 +131,6 @@ public class TransactionProcessor {
                                          BigDecimal amount, LocalDateTime now) {
         createLedgerEntry(tx, fromWallet, "DEBIT", amount, now);
         createLedgerEntry(tx, toWallet, "CREDIT", amount, now);
-    }
-
-    private void updateBalancesAndFinalize(WalletTransaction tx, Wallet fromWallet, Wallet toWallet,
-                                           BigDecimal amount, LocalDateTime now) {
-        // Update balances
-        BigDecimal fromBalance = NullSafeUtils.safeGetBigDecimal(fromWallet.getBalance()).subtract(amount);
-        BigDecimal toBalance = NullSafeUtils.safeGetBigDecimal(toWallet.getBalance()).add(amount);
-
-        fromWallet.setBalance(fromBalance);
-        toWallet.setBalance(toBalance);
-        fromWallet.setUpdatedAt(now);
-        toWallet.setUpdatedAt(now);
-
-        // Mark transaction SUCCESS
-        tx.setStatus("SUCCESS");
-        tx.setUpdatedAt(now);
-
-        // Save everything
-        walletRepository.save(fromWallet);
-        walletRepository.save(toWallet);
-        walletTransactionRepository.save(tx);
-    }
-
-    private void createFailedTransaction(String transactionType, User user, AssetType assetType,
-                                         BigDecimal amount, String failureReason,
-                                         String idempotencyKey, LocalDateTime now) {
-        WalletTransaction failedTx = WalletTransaction.builder()
-                .transactionType(transactionType)
-                .user(user)
-                .assetType(assetType)
-                .amount(amount)
-                .status("FAILED")
-                .failureReason(failureReason)
-                .idempotencyKey(idempotencyKey)
-                .createdAt(now)
-                .updatedAt(now)
-                .build();
-
-        walletTransactionRepository.save(failedTx);
     }
 
     private void createLedgerEntry(WalletTransaction tx, Wallet wallet, String entryType,
