@@ -1,6 +1,3 @@
-Here is a **clean, honest, and detailed README.md** — exactly what you should put in your repo.
-
-```markdown
 # Dinoventures Wallet Service
 
 A battle-hardened, closed-loop virtual currency system for games and loyalty platforms.
