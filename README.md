@@ -1,57 +1,59 @@
 # Dinoventures Wallet Service  
 **Closed-loop virtual currency engine for games & loyalty platforms**
 
-A production-grade wallet backend that safely handles **Gold Coins**, **Diamonds** and other in-app currencies — even under heavy concurrent abuse.
+A production-grade wallet backend built to handle **Gold Coins**, **Diamonds**, and other in-app currencies — safely, even when thousands of requests hammer it at once.
 
-Never loses a single coin.  
-Never creates money from nothing.  
+Never loses a coin.  
+Never creates money from thin air.  
 Never allows negative balances.  
-Always tells the truth via double-entry ledger.
+Always tells the full story via double-entry ledger.
 
 ---
 
 ## 🎯 What This Project Does
 
-This is a **closed-loop wallet system** — virtual credits exist only inside the application.
+This is a **closed-loop wallet system** — virtual credits live only inside your application.
 
-- Users **earn** (top-up / bonus) and **spend** credits  
-- Credits **cannot** be transferred between users  
-- Credits **cannot** be cashed out or turned into real money/crypto  
+- Users **earn** credits via top-up (paid) or bonus (free)  
+- Users **spend** credits on in-game items/services  
+- Credits **cannot** be sent to other users  
+- Credits **cannot** be withdrawn or converted to real money/crypto  
 
-Typical use-case: in-game currency like V-Bucks, Robux, or loyalty points in a mobile game or rewards app.
+Perfect for mobile/PC games (like V-Bucks or Robux) or loyalty/rewards platforms.
 
-Core promise: **correct balances + full audit trail — even when 1000+ requests hit at the same second.**
+Core promise: **correct balances + complete audit trail — no matter how many concurrent requests arrive.**
 
 ---
 
 ## ✅ Requirements Fulfillment Checklist
 
-| Requirement                              | Implemented? | How / Where                                                                 |
-|------------------------------------------|--------------|-----------------------------------------------------------------------------|
-| Data seeding (assets, system wallets, users) | ✅           | Automatic on startup via `WalletDataInitializer` (no manual seed.sql needed) |
-| REST API endpoints (top-up, bonus, spend, get balances) | ✅           | `/api/v1/wallets/topup`, `/bonus`, `/spend`, `/balances/{userId}`           |
-| Transactional top-up / bonus / spend     | ✅           | `@Transactional` + atomic DB operations                                     |
-| Concurrency / race condition safety      | ✅           | Atomic `UPDATE … WHERE balance >= ?` pattern                                |
-| Idempotency (safe retries)               | ✅           | Unique constraint + check inside transaction                                |
-| Double-entry ledger                      | ✅           | `ledger_entries` table — every success tx has exactly DEBIT + CREDIT        |
-| Containerization (Docker + Compose)      | ✅           | `Dockerfile` + `docker-compose.yml`                                         |
-| Clear README with tech choices & concurrency explanation | ✅           | This file                                                                  |
+| Requirement                              | Done? | How / Where                                                                 |
+|------------------------------------------|-------|-----------------------------------------------------------------------------|
+| Data seeding (assets, system wallets, users) | ✅    | Automatic on app startup via `WalletDataInitializer` (no manual seed.sql)   |
+| REST API endpoints                       | ✅    | `/api/v1/wallets/topup`, `/bonus`, `/spend`, `/balances/{userId}`           |
+| Transactional top-up / bonus / spend     | ✅    | `@Transactional` + atomic DB operations                                     |
+| Concurrency & race condition protection  | ✅    | Atomic `UPDATE … WHERE balance >= ?` pattern                                |
+| Idempotency (safe retries)               | ✅    | Unique DB constraint + check inside transaction                             |
+| Double-entry ledger                      | ✅    | `ledger_entries` table — every success tx has DEBIT + CREDIT                |
+| Docker + docker-compose                  | ✅    | `Dockerfile` + `docker-compose.yml`                                         |
+| Clear README (tech choices + concurrency) | ✅    | This file                                                                  |
 
 ---
 
-## 🛠 Technology Stack & Important Decisions
+## 🛠 Technology & Concurrency Decisions
 
-| Component          | Choice              | Why we picked it (2025 perspective)                                                                 |
-|---------------------|---------------------|------------------------------------------------------------------------------------------------------|
-| Language / Framework| **Spring Boot** (Java 21) | Mature transaction management, excellent JPA, huge ecosystem, easy to hire & maintain                |
-| Database            | **PostgreSQL**      | Best-in-class MVCC, atomic `UPDATE … RETURNING`, rock-solid ACID, superior concurrency behavior     |
-| Concurrency control | **Atomic UPDATE**   | Shortest lock time, **zero deadlock risk**, database guarantees correctness — no race window        |
-| Alternative rejected| SELECT FOR UPDATE   | Longer locks → lower throughput, occasional deadlocks even with ordering                             |
-| Alternative rejected| Optimistic locking  | Too many retries under real contention → poor UX                                                    |
-| Alternative rejected| Redis lock          | Extra component, added latency, unnecessary operational complexity for this use-case                |
+| Component          | Choice              | Why (2025 view)                                                                     |
+|---------------------|---------------------|-------------------------------------------------------------------------------------|
+| Framework           | **Spring Boot**     | Mature transactions, excellent JPA, huge ecosystem, easy team onboarding           |
+| Database            | **PostgreSQL**      | Best MVCC + ACID for high-contention financial workloads                            |
+| Concurrency control | **Atomic UPDATE**   | Shortest lock, **zero deadlock risk**, DB guarantees atomicity — no race window    |
 
-**Concurrency strategy summary**  
-We use **database-level atomic debit/credit**:
+**Rejected alternatives**  
+- Optimistic locking → too many retries under load  
+- SELECT FOR UPDATE → longer locks, occasional deadlocks  
+- Redis lock → extra service, latency, complexity  
+
+**How atomic UPDATE works** (simplified):
 
 ```sql
 UPDATE wallets 
@@ -59,39 +61,47 @@ SET balance = balance - :amount
 WHERE id = :walletId AND balance >= :amount;
 ```
 
-- If 0 rows affected → insufficient funds (immediate 409)  
-- Lock lasts only microseconds  
-- No multi-statement locking → **no deadlocks**  
-- Idempotency enforced via unique constraint on `idempotency_key`
+- 0 rows affected → insufficient funds (409)  
+- Lock lasts microseconds  
+- No multi-statement transaction needed → **no deadlocks**
 
-This is the same pattern used in most serious gaming & fintech wallet systems today.
+This pattern is battle-tested in gaming wallets and fintech ledgers.
 
 ---
 
-## 🚀 How to Run (Two-Terminal Workflow)
+## 🚀 How to Run (Step-by-Step)
 
-### Terminal 1 – Start the service
+### 1. Clone the repository
 
 ```bash
-# Build & launch Spring Boot + PostgreSQL
+git clone https://github.com/Ravindra-Pagidala/wallet-service.git
+
+cd wallet-service
+```
+
+### 2. Start the service (Terminal 1)
+
+```bash
+# Build the Docker image & start PostgreSQL + Spring Boot
 docker compose up --build -d
 
-# Wait ~20–40 seconds (watch logs if you want)
+# Wait 20–40 seconds until ready
+# Optional: watch logs in real-time
 docker compose logs -f wallet-app
 ```
 
-**Data initialization happens automatically** when the app starts:
+**Automatic initialization happens here** — when the app starts:
 
-- Assets: GOLD, DIAMONDS  
-- 3 test users  
-- System wallets: TREASURY (1M), BONUS (50k), REVENUE (0) per asset
+- Assets created: GOLD, DIAMONDS  
+- 3 test users created  
+- System wallets created: TREASURY (1,000,000), BONUS (50,000), REVENUE (0) per asset  
 
-No manual SQL required.
+No manual SQL or seed script needed.
 
-### Terminal 2 – Run tests
+### 3. Run the tests (Terminal 2 – open a new terminal)
 
 ```bash
-# Make scripts executable (only needed once)
+# Make scripts executable (only needed the first time)
 chmod +x test-wallet.sh
 chmod +x validate-db.sh
 
@@ -99,54 +109,52 @@ chmod +x validate-db.sh
 ./test-wallet.sh
 ```
 
-You should see:
+Expected final line:
 
 ```
 🎉 ✅ PRODUCTION READY! 10/10 ALL TESTS PASS
 ✅ ACID | Race-Proof | Double-Entry
 ```
 
-Then (optional) run deep validation:
+Then (optional) deep database validation:
 
 ```bash
 ./validate-db.sh
 ```
 
-### Clean restart / fresh test
+### 4. Reset everything for a clean test
 
 ```bash
 docker compose down -v
+# Then restart with:
 docker compose up --build -d
 ```
 
 ---
 
-## 📋 Scripts Overview
+## 📋 Scripts – Quick Reference
 
-| File                | Purpose                                                                 | Run with                     |
-|---------------------|-------------------------------------------------------------------------|------------------------------|
-| `test-wallet.sh`    | Complete correctness + stress test (economy flow, idempotency, races, audit) | `./test-wallet.sh`          |
-| `validate-db.sh`    | Deep integrity check (balances, ledger balance, conservation of money, orphans, race results) | `./validate-db.sh`          |
-| `docker-compose.yml`| Starts PostgreSQL + Spring Boot app (port 8080)                         | `docker compose up --build` |
+| Script              | What it tests / does                                                        | Command                     |
+|---------------------|-----------------------------------------------------------------------------|-----------------------------|
+| `test-wallet.sh`    | Full suite: economy flow, idempotency, overdraft, **race conditions**, audit | `./test-wallet.sh`         |
+| `validate-db.sh`    | Deep integrity: balances, ledger matching, money conservation, race proof   | `./validate-db.sh`         |
+| `docker-compose.yml`| Launches PostgreSQL + Spring Boot app (exposed on http://localhost:8080)    | `docker compose up --build`|
 
 ---
 
-## 🎯 Final Words
+## 🎯 Final Summary
 
-This wallet service is built to survive real high-traffic abuse:
+This wallet is hardened against real abuse:
 
-- 20 concurrent spends of 10 from 150 → max 15 succeed  
-- 30 concurrent top-ups of 5 from treasury 100 → max 20 succeed  
-- Zero negative balances  
-- Zero money creation/loss  
-- Full audit trail via double-entry ledger  
-- Safe retries via idempotency keys
+- 20 concurrent 10-gold spends from 150 → max ~15 succeed  
+- 30 concurrent 5-gold top-ups from treasury 100 → max ~20 succeed  
+- No negatives ever  
+- Full double-entry audit trail  
+- Safe retries via idempotency keys  
+- Everything auto-initializes on startup  
+- Everything runs in Docker
 
-Everything initializes automatically.  
-Everything runs in Docker.  
-Everything survives aggressive race-condition testing.
+Ready for high-traffic gaming or loyalty backends.
 
-Ready for real gaming / loyalty traffic.
-
-Built in Hyderabad with ☕ and care.  
+Built in Hyderabad with persistence and coffee.  
 — Ravindra Pagidala
